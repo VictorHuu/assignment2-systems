@@ -17,10 +17,19 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="End-to-end forward/backward benchmark for BasicsTransformerLM")
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--precision", choices=["fp32", "fp16", "bf16"], default="fp32")
-    parser.add_argument("--mode", choices=["forward", "forward_backward", "training_step"], default="forward_backward")
+    parser.add_argument(
+        "--mode",
+        choices=["inference", "training"],
+        default="training",
+        help="inference=forward-only, training=forward+backward+optimizer step.",
+    )
     parser.add_argument("--warmup-steps", type=int, default=5)
     parser.add_argument("--measure-steps", type=int, default=10)
-    parser.add_argument("--enable-nvtx", action="store_true", help="Annotate warmup/measured/model regions with NVTX.")
+    parser.add_argument(
+        "--enable-nvtx",
+        action="store_true",
+        help="Annotate warmup/measured/model regions and fine-grained step stages with NVTX.",
+    )
     parser.add_argument(
         "--annotate-attention-nvtx",
         action="store_true",
@@ -28,6 +37,22 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--optimizer-lr", type=float, default=1e-3)
     parser.add_argument("--seed", type=int, default=1337)
+    parser.add_argument(
+        "--memory-profile",
+        action="store_true",
+        help="Record CUDA memory allocation history and dump a snapshot pickle.",
+    )
+    parser.add_argument(
+        "--memory-snapshot-path",
+        default="memory_snapshot.pickle",
+        help="Output path for torch.cuda.memory._dump_snapshot when --memory-profile is enabled.",
+    )
+    parser.add_argument(
+        "--memory-max-entries",
+        type=int,
+        default=1_000_000,
+        help="Maximum number of memory history entries to keep while recording.",
+    )
     parser.add_argument(
         "--autocast-dtype",
         choices=["none", "fp16", "bf16"],
@@ -119,6 +144,8 @@ def main() -> None:
         raise ValueError("fp16 on CPU is not supported for this benchmark. Use fp32 or bf16.")
     if autocast_enabled and dtype != torch.float32:
         raise ValueError("When using --autocast-dtype, keep --precision=fp32 so parameters stay in FP32.")
+    if args.memory_profile and device.type != "cuda":
+        raise ValueError("--memory-profile requires CUDA because torch.cuda.memory snapshots are CUDA-only.")
 
     model = BasicsTransformerLM(
         vocab_size=args.vocab_size,
@@ -144,37 +171,40 @@ def main() -> None:
         device=device,
         dtype=torch.long,
     )
-    optimizer = AdamW(model.parameters(), lr=args.optimizer_lr) if args.mode == "training_step" else None
+    optimizer = AdamW(model.parameters(), lr=args.optimizer_lr) if args.mode == "training" else None
 
     model.eval()
+    nvtx_enabled = args.enable_nvtx and device.type == "cuda"
 
-    def forward_step() -> None:
-        with torch.inference_mode():
-            with get_autocast_context(device, args.autocast_dtype):
-                _ = model(input_tokens)
+    @contextlib.contextmanager
+    def stage_nvtx(stage_name: str):
+        with maybe_nvtx_range(nvtx_enabled, stage_name):
+            yield
 
-    def forward_backward_step() -> None:
-        model.train()
-        model.zero_grad(set_to_none=True)
-        with get_autocast_context(device, args.autocast_dtype):
-            logits = model(input_tokens)
-            loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), labels.reshape(-1))
-        loss.backward()
+    def inference_step() -> None:
+        with stage_nvtx("forward"):
+            with torch.inference_mode():
+                with get_autocast_context(device, args.autocast_dtype):
+                    _ = model(input_tokens)
 
     def training_step() -> None:
         model.train()
         assert optimizer is not None
-        optimizer.zero_grad(set_to_none=True)
-        with get_autocast_context(device, args.autocast_dtype):
-            logits = model(input_tokens)
+        with stage_nvtx("optimizer_zero_grad"):
+            optimizer.zero_grad(set_to_none=True)
+        with stage_nvtx("forward"):
+            with get_autocast_context(device, args.autocast_dtype):
+                logits = model(input_tokens)
+        with stage_nvtx("loss"):
             loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), labels.reshape(-1))
-        loss.backward()
-        optimizer.step()
+        with stage_nvtx("backward"):
+            loss.backward()
+        with stage_nvtx("optimizer_step"):
+            optimizer.step()
 
     step_fn_map = {
-        "forward": forward_step,
-        "forward_backward": forward_backward_step,
-        "training_step": training_step,
+        "inference": inference_step,
+        "training": training_step,
     }
     step_fn = step_fn_map[args.mode]
     mode_nvtx_name = args.mode
@@ -186,6 +216,11 @@ def main() -> None:
                     step_fn()
                 synchronize(device)
 
+        if args.memory_profile:
+            torch.cuda.empty_cache()
+            torch.cuda.reset_peak_memory_stats(device)
+            torch.cuda.memory._record_memory_history(max_entries=args.memory_max_entries)
+
         timings = []
         for _ in range(args.measure_steps):
             with maybe_nvtx_range(args.enable_nvtx and device.type == "cuda", "measured_step"):
@@ -195,6 +230,10 @@ def main() -> None:
                 synchronize(device)
                 end = default_timer()
             timings.append(end - start)
+
+        if args.memory_profile:
+            torch.cuda.memory._dump_snapshot(args.memory_snapshot_path)
+            torch.cuda.memory._record_memory_history(enabled=None)
 
     avg_ms = statistics.mean(timings) * 1000
     median_ms = statistics.median(timings) * 1000
@@ -210,6 +249,13 @@ def main() -> None:
         f"d_model={args.d_model}, num_layers={args.num_layers}, num_heads={args.num_heads}, d_ff={args.d_ff}"
     )
     print(f"mean={avg_ms:.3f} ms, median={median_ms:.3f} ms, std={std_ms:.3f} ms")
+    if args.memory_profile:
+        peak_allocated_mib = torch.cuda.max_memory_allocated(device) / (1024**2)
+        peak_reserved_mib = torch.cuda.max_memory_reserved(device) / (1024**2)
+        print(
+            f"memory_snapshot={args.memory_snapshot_path}, "
+            f"peak_allocated={peak_allocated_mib:.3f} MiB, peak_reserved={peak_reserved_mib:.3f} MiB"
+        )
 
 
 if __name__ == "__main__":

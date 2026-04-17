@@ -125,7 +125,7 @@ def summarize_report(report: Path) -> SummaryRow:
     measured_step_ns = first_matching_nvtx_avg_ns(nvtx_rows, [":measured_step"])
     mode_step_ns = first_matching_nvtx_avg_ns(
         nvtx_rows,
-        [":forward", ":forward_step", ":forward_backward", ":forward_backward_step", ":training_step"],
+        [":inference", ":forward", ":forward_step", ":training", ":training_step"],
     )
     softmax_ns = first_matching_nvtx_avg_ns(nvtx_rows, [":computing softmax"])
     final_matmul_ns = first_matching_nvtx_avg_ns(nvtx_rows, [":final matmul"])

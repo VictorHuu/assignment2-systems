@@ -63,3 +63,18 @@ To submit, run `./test_and_make_submission.sh` . This script will install your
 code's dependencies, run tests, and create a gzipped tarball with the output. We
 should be able to unzip your submitted tarball and run
 `./test_and_make_submission.sh` to verify your test results.
+
+## Convenience scripts
+
+- `./run_memory_profiles_2_7b.sh`: runs CUDA memory profiling sweeps for the
+  2.7B model configuration (`d_model=2560`, `d_ff=10240`, `num_layers=32`,
+  `num_heads=32`) across context lengths `128,256,512` for both FP32 and BF16
+  autocast (with NVTX stage annotations enabled by default). The script emits:
+  - `*.pickle` memory snapshots for https://pytorch.org/memory_viz
+  - `peak_memory_summary.csv` with parsed peak allocated/reserved memory.
+- `./run_nsys_profiles.sh`: defaults to `MODES=training` (single-mode
+  profiling), with env var overrides for contexts/model size.
+- `./run_benchmark_sweep_and_dump.sh`: defaults to `MODES=training`
+  and supports env var overrides for sweep parameters.
+- `./run_mixed_precision_tasks.sh`: runs mixed-precision benchmarks for one
+  mode by default (`BENCH_MODE=training`), avoiding duplicate runs.

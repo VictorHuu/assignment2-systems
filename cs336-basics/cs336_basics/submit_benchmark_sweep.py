@@ -60,7 +60,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--context-lengths", type=comma_separated_ints, default=[1024])
     parser.add_argument("--batch-sizes", type=comma_separated_ints, default=[8])
     parser.add_argument("--precisions", type=comma_separated_strings, default=["fp32"])
-    parser.add_argument("--modes", type=comma_separated_strings, default=["forward_backward"])
+    parser.add_argument("--modes", type=comma_separated_strings, default=["training"])
 
     parser.add_argument("--slurm-partition", default="")
     parser.add_argument("--slurm-account", default="")
