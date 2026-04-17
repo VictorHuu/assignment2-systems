@@ -97,13 +97,13 @@ With BF16, stability is better than FP16 due to larger dynamic range, but LayerN
 The speedup increases with model size, which is consistent with larger models spending a greater fraction of time in tensor-core-friendly matmul workloads where BF16 autocast helps more.
 
 ### memory_profiling
-### Training step timelines
+#### Training step timelines
 
 | Full training step | Training step (ctx=256) |
 |---|---|
 | ![](images/memory_profiling/memory-profiling-training.png) | ![](images/memory_profiling/memory-profiling-training-ctx-256.png) |
 
-### Inference-only timelines
+#### Inference-only timelines
 
 | ctx=128 | ctx=256 | ctx=512 |
 |---|---|---|
@@ -127,3 +127,47 @@ Thus, a single residual stream activation tensor is approximately 20 MB in singl
 ![](images/memory_profiling/top5-memory.png)
 
 - The largest allocations are approximately 490 MiB. From the stack trace and their size, these correspond to attention-related tensors (e.g., $QK^T$ and softmax buffers) created during the forward pass, which scale as $O(B \times H \times T^2)$ and dominate memory usage.
+## 1.2 Optimizing Attention with Flash Attention 2
+### pytorch_attention
+#### Benchmark Results
+
+| d_model | seq_len | status | forward_ms | backward_ms | memory_before_backward_mib |
+|--------|--------|--------|-----------:|------------:|---------------------------:|
+| 16 | 256 | ok | 0.13 | 0.39 | 18.94 |
+| 16 | 1024 | ok | 0.31 | 0.64 | 51.75 |
+| 16 | 4096 | ok | 3.13 | 5.26 | 554.25 |
+| 16 | 8192 | ok | 11.98 | 20.36 | 2148.25 |
+| 16 | 16384 | oom | - | - | - |
+| 32 | 256 | ok | 0.39 | 0.71 | 19.56 |
+| 32 | 1024 | ok | 0.39 | 0.71 | 54.25 |
+| 32 | 4096 | ok | 3.18 | 5.34 | 564.25 |
+| 32 | 8192 | ok | 12.24 | 20.66 | 2168.25 |
+| 32 | 16384 | oom | - | - | - |
+| 64 | 256 | ok | 0.36 | 0.71 | 20.81 |
+| 64 | 1024 | ok | 0.50 | 0.80 | 59.25 |
+| 64 | 4096 | ok | 3.31 | 5.70 | 584.25 |
+| 64 | 8192 | ok | 12.80 | 21.54 | 2208.25 |
+| 64 | 16384 | oom | - | - | - |
+| 128 | 256 | ok | 0.21 | 0.41 | 23.31 |
+| 128 | 1024 | ok | 0.31 | 0.58 | 69.25 |
+| 128 | 4096 | ok | 4.25 | 7.36 | 624.25 |
+| 128 | 8192 | ok | 16.76 | 28.41 | 2288.25 |
+| 128 | 16384 | oom | - | - | - |
+
+---
+
+#### Memory Accounting (Smallest OOM Case)
+
+For the smallest failing configuration (B = 8, d_model = 16, seq_len = 16384), the dominant tensor in attention is the attention score matrix of shape (B, T, T). Its memory usage in fp32 is:
+
+Memory = 8 × 16384 × 16384 × 4 bytes ≈ 8.6 GB
+
+During forward and backward passes, multiple such tensors are materialized (e.g., attention scores, softmax outputs, gradients), leading to a total memory requirement of roughly 16–24 GB, which exceeds the available GPU memory and causes OOM.
+
+---
+
+#### Analysis
+
+All configurations run successfully up to sequence length 8192, but fail at 16384 regardless of d_model, indicating that memory usage is dominated by sequence length rather than embedding dimension. Empirically, the memory before backward grows rapidly with sequence length, increasing by roughly 4× when sequence length doubles, consistent with the O(T²) complexity of attention. This quadratic scaling arises from the need to materialize the full attention matrix.
+
+To eliminate this memory cost, one can use memory-efficient attention mechanisms such as FlashAttention, which avoid explicitly storing the full T×T matrix and reduce memory complexity to O(T). Alternatively, activation checkpointing can trade compute for memory by recomputing intermediate activations during the backward pass.
