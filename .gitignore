@@ -167,4 +167,7 @@ submitit_logs
 TIMEOUT_SECONDS
 !nsys_reports/summary.csv
 nsys_reports/
+memory_profiles_2p7b/
+!memory_profiles_2p7b/*.log
+!memory_profiles_2p7b/peak_memory_summary.csv
 

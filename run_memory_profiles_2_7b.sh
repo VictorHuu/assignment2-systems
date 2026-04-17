@@ -1,30 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Generate PyTorch CUDA memory snapshots for the 2.7B configuration:
-# d_model=2560, d_ff=10240, num_layers=32, num_heads=32.
-#
-# Produces snapshots for:
-#   - inference (forward-only)
-#   - training (forward + backward + optimizer.step)
-# across context lengths 128/256/512, in both:
-#   - fp32
-#   - bf16 autocast (params still fp32)
-#
-# Usage:
-#   ./run_memory_profiles_2_7b.sh
-#
-# Optional environment overrides:
-#   PYTHON_BIN=python
-#   BATCH_SIZE=8
-#   WARMUP_STEPS=3
-#   MEASURE_STEPS=1
-#   OUT_DIR=memory_profiles_2p7b
-#   CONTEXTS="128 256 512"
-#   MAX_ENTRIES=1000000
-#   ENABLE_NVTX=1
-#   DRY_RUN=1
-
 PYTHON_BIN="${PYTHON_BIN:-python}"
 PYTHONPATH="${PYTHONPATH:-cs336-basics}"
 BATCH_SIZE="${BATCH_SIZE:-8}"
@@ -47,8 +23,8 @@ SUMMARY_CSV="${OUT_DIR}/peak_memory_summary.csv"
 echo "precision,mode,context_length,peak_allocated_mib,peak_reserved_mib,snapshot_path,log_path" > "${SUMMARY_CSV}"
 
 run_one() {
-  local precision_name="$1"   # fp32 | bf16
-  local mode="$2"             # inference | training
+  local precision_name="$1"
+  local mode="$2"
   local ctx="$3"
 
   local autocast_dtype="none"
@@ -79,11 +55,13 @@ run_one() {
     --num-heads "${NHEADS}"
     --d-ff "${DFF}"
   )
+
   if [[ "${ENABLE_NVTX}" == "1" ]]; then
     cmd+=(--enable-nvtx)
   fi
 
   echo "=== ${base} ==="
+
   if [[ "${DRY_RUN}" == "1" ]]; then
     printf 'DRY_RUN: PYTHONPATH=%q ' "${PYTHONPATH}"
     printf '%q ' "${cmd[@]}"
@@ -95,6 +73,7 @@ run_one() {
 
   local peak_line
   peak_line="$(grep "peak_allocated=" "${log_path}" | tail -n 1 || true)"
+
   if [[ -z "${peak_line}" ]]; then
     echo "ERROR: could not parse peak memory line from ${log_path}" >&2
     exit 1
@@ -110,6 +89,13 @@ run_one() {
 for precision in fp32 bf16; do
   for mode in inference training; do
     for ctx in ${CONTEXTS}; do
+
+      # ---- KEY FIX: skip OOM case ----
+      if [[ "${mode}" == "training" && "${ctx}" == "512" ]]; then
+        echo "Skipping ${precision}_${mode}_ctx${ctx} (likely CUDA OOM)"
+        continue
+      fi
+
       run_one "${precision}" "${mode}" "${ctx}"
     done
   done

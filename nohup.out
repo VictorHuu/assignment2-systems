@@ -1,0 +1,85 @@
+=== fp32_inference_ctx128 ===
+
+libgomp: Invalid value for environment variable OMP_NUM_THREADS
+Benchmark configuration:
+device=cuda, precision=fp32, mode=inference, autocast_dtype=none, warmup_steps=3, measure_steps=1
+batch_size=8, context_length=128, vocab_size=50257, d_model=2560, num_layers=32, num_heads=32, d_ff=10240
+mean=155.393 ms, median=155.393 ms, std=0.000 ms
+memory_snapshot=memory_profiles_2p7b/fp32_inference_ctx128.pickle, peak_allocated=14124.713 MiB, peak_reserved=14386.000 MiB
+=== fp32_inference_ctx256 ===
+
+libgomp: Invalid value for environment variable OMP_NUM_THREADS
+Benchmark configuration:
+device=cuda, precision=fp32, mode=inference, autocast_dtype=none, warmup_steps=3, measure_steps=1
+batch_size=8, context_length=256, vocab_size=50257, d_model=2560, num_layers=32, num_heads=32, d_ff=10240
+mean=313.627 ms, median=313.627 ms, std=0.000 ms
+memory_snapshot=memory_profiles_2p7b/fp32_inference_ctx256.pickle, peak_allocated=14331.084 MiB, peak_reserved=14974.000 MiB
+=== fp32_inference_ctx512 ===
+
+libgomp: Invalid value for environment variable OMP_NUM_THREADS
+Benchmark configuration:
+device=cuda, precision=fp32, mode=inference, autocast_dtype=none, warmup_steps=3, measure_steps=1
+batch_size=8, context_length=512, vocab_size=50257, d_model=2560, num_layers=32, num_heads=32, d_ff=10240
+mean=689.411 ms, median=689.411 ms, std=0.000 ms
+memory_snapshot=memory_profiles_2p7b/fp32_inference_ctx512.pickle, peak_allocated=15143.318 MiB, peak_reserved=16066.000 MiB
+=== fp32_training_ctx128 ===
+
+libgomp: Invalid value for environment variable OMP_NUM_THREADS
+Benchmark configuration:
+device=cuda, precision=fp32, mode=training, autocast_dtype=none, warmup_steps=3, measure_steps=1
+batch_size=8, context_length=128, vocab_size=50257, d_model=2560, num_layers=32, num_heads=32, d_ff=10240
+mean=733.105 ms, median=733.105 ms, std=0.000 ms
+memory_snapshot=memory_profiles_2p7b/fp32_training_ctx128.pickle, peak_allocated=57926.444 MiB, peak_reserved=63176.000 MiB
+=== fp32_training_ctx256 ===
+
+libgomp: Invalid value for environment variable OMP_NUM_THREADS
+Benchmark configuration:
+device=cuda, precision=fp32, mode=training, autocast_dtype=none, warmup_steps=3, measure_steps=1
+batch_size=8, context_length=256, vocab_size=50257, d_model=2560, num_layers=32, num_heads=32, d_ff=10240
+mean=1153.133 ms, median=1153.133 ms, std=0.000 ms
+memory_snapshot=memory_profiles_2p7b/fp32_training_ctx256.pickle, peak_allocated=66449.050 MiB, peak_reserved=74338.000 MiB
+Skipping fp32_training_ctx512 (likely CUDA OOM)
+=== bf16_inference_ctx128 ===
+
+libgomp: Invalid value for environment variable OMP_NUM_THREADS
+Benchmark configuration:
+device=cuda, precision=fp32, mode=inference, autocast_dtype=bf16, warmup_steps=3, measure_steps=1
+batch_size=8, context_length=128, vocab_size=50257, d_model=2560, num_layers=32, num_heads=32, d_ff=10240
+mean=96.526 ms, median=96.526 ms, std=0.000 ms
+memory_snapshot=memory_profiles_2p7b/bf16_inference_ctx128.pickle, peak_allocated=20677.555 MiB, peak_reserved=21482.000 MiB
+=== bf16_inference_ctx256 ===
+
+libgomp: Invalid value for environment variable OMP_NUM_THREADS
+Benchmark configuration:
+device=cuda, precision=fp32, mode=inference, autocast_dtype=bf16, warmup_steps=3, measure_steps=1
+batch_size=8, context_length=256, vocab_size=50257, d_model=2560, num_layers=32, num_heads=32, d_ff=10240
+mean=96.823 ms, median=96.823 ms, std=0.000 ms
+memory_snapshot=memory_profiles_2p7b/bf16_inference_ctx256.pickle, peak_allocated=20790.768 MiB, peak_reserved=21374.000 MiB
+=== bf16_inference_ctx512 ===
+
+libgomp: Invalid value for environment variable OMP_NUM_THREADS
+Benchmark configuration:
+device=cuda, precision=fp32, mode=inference, autocast_dtype=bf16, warmup_steps=3, measure_steps=1
+batch_size=8, context_length=512, vocab_size=50257, d_model=2560, num_layers=32, num_heads=32, d_ff=10240
+mean=224.321 ms, median=224.321 ms, std=0.000 ms
+memory_snapshot=memory_profiles_2p7b/bf16_inference_ctx512.pickle, peak_allocated=21111.818 MiB, peak_reserved=22358.000 MiB
+=== bf16_training_ctx128 ===
+
+libgomp: Invalid value for environment variable OMP_NUM_THREADS
+Benchmark configuration:
+device=cuda, precision=fp32, mode=training, autocast_dtype=bf16, warmup_steps=3, measure_steps=1
+batch_size=8, context_length=128, vocab_size=50257, d_model=2560, num_layers=32, num_heads=32, d_ff=10240
+mean=485.157 ms, median=485.157 ms, std=0.000 ms
+memory_snapshot=memory_profiles_2p7b/bf16_training_ctx128.pickle, peak_allocated=57827.286 MiB, peak_reserved=60972.000 MiB
+=== bf16_training_ctx256 ===
+
+libgomp: Invalid value for environment variable OMP_NUM_THREADS
+Benchmark configuration:
+device=cuda, precision=fp32, mode=training, autocast_dtype=bf16, warmup_steps=3, measure_steps=1
+batch_size=8, context_length=256, vocab_size=50257, d_model=2560, num_layers=32, num_heads=32, d_ff=10240
+mean=603.326 ms, median=603.326 ms, std=0.000 ms
+memory_snapshot=memory_profiles_2p7b/bf16_training_ctx256.pickle, peak_allocated=64068.917 MiB, peak_reserved=69796.000 MiB
+Skipping bf16_training_ctx512 (likely CUDA OOM)
+
+Done. Summary CSV: memory_profiles_2p7b/peak_memory_summary.csv
+Open https://pytorch.org/memory_viz and drag/drop any generated *.pickle file.

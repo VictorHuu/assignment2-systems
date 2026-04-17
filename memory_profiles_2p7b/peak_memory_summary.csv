@@ -1,0 +1,11 @@
+precision,mode,context_length,peak_allocated_mib,peak_reserved_mib,snapshot_path,log_path
+fp32,inference,128,14124.713,14386.000,memory_profiles_2p7b/fp32_inference_ctx128.pickle,memory_profiles_2p7b/fp32_inference_ctx128.log
+fp32,inference,256,14331.084,14974.000,memory_profiles_2p7b/fp32_inference_ctx256.pickle,memory_profiles_2p7b/fp32_inference_ctx256.log
+fp32,inference,512,15143.318,16066.000,memory_profiles_2p7b/fp32_inference_ctx512.pickle,memory_profiles_2p7b/fp32_inference_ctx512.log
+fp32,training,128,57926.444,63176.000,memory_profiles_2p7b/fp32_training_ctx128.pickle,memory_profiles_2p7b/fp32_training_ctx128.log
+fp32,training,256,66449.050,74338.000,memory_profiles_2p7b/fp32_training_ctx256.pickle,memory_profiles_2p7b/fp32_training_ctx256.log
+bf16,inference,128,20677.555,21482.000,memory_profiles_2p7b/bf16_inference_ctx128.pickle,memory_profiles_2p7b/bf16_inference_ctx128.log
+bf16,inference,256,20790.768,21374.000,memory_profiles_2p7b/bf16_inference_ctx256.pickle,memory_profiles_2p7b/bf16_inference_ctx256.log
+bf16,inference,512,21111.818,22358.000,memory_profiles_2p7b/bf16_inference_ctx512.pickle,memory_profiles_2p7b/bf16_inference_ctx512.log
+bf16,training,128,57827.286,60972.000,memory_profiles_2p7b/bf16_training_ctx128.pickle,memory_profiles_2p7b/bf16_training_ctx128.log
+bf16,training,256,64068.917,69796.000,memory_profiles_2p7b/bf16_training_ctx256.pickle,memory_profiles_2p7b/bf16_training_ctx256.log

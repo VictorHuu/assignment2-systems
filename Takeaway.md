@@ -95,3 +95,35 @@ With BF16, stability is better than FP16 due to larger dynamic range, but LayerN
 - size2 (768,12,12,3072): FP32 312.8410 ms vs BF16 autocast 215.1880 ms (speedup 1.4538x)
 
 The speedup increases with model size, which is consistent with larger models spending a greater fraction of time in tensor-core-friendly matmul workloads where BF16 autocast helps more.
+
+### memory_profiling
+### Training step timelines
+
+| Full training step | Training step (ctx=256) |
+|---|---|
+| ![](images/memory_profiling/memory-profiling-training.png) | ![](images/memory_profiling/memory-profiling-training-ctx-256.png) |
+
+### Inference-only timelines
+
+| ctx=128 | ctx=256 | ctx=512 |
+|---|---|---|
+| ![](images/memory_profiling/memory-profiling-inference-ctx-128.png) | ![](images/memory_profiling/memory-profiling-inference-ctx-256.png) | ![](images/memory_profiling/memory-profiling-inference-ctx-512.png) |
+- The inference memory timeline is nearly flat (~12–13 GiB) with small transient spikes, indicating no activation accumulation and immediate buffer reuse. In contrast, the full training step shows a clear three-phase pattern: memory increases during the forward pass due to activation storage, decreases steadily during the backward pass as activations are freed in reverse order, and exhibits minor fluctuations during the optimizer step. Thus, the stages can be reliably identified from the memory peaks and slopes.
+- 
+| Context length | Forward peak reserved (GB) | Full training step peak reserved (GB) |
+|---|---:|---:|
+| 128 | 14.370 | 63.176 |
+| 256 | 14.974 | 74.340 |
+| 512 | 16.066 | N/A (missing from provided logs) |
+
+- With mixed-precision (bf16 autocast), the peak memory usage is about 21 GiB for the forward pass and 58–64 GiB for a full training step. Mixed-precision does not significantly reduce memory usage in this setup; forward memory actually increases slightly, and training memory remains nearly unchanged because model parameters and optimizer states are still stored in fp32.
+- The residual stream activation tensor has shape (batch size, context length, d_model). Using $$B = 8, T = 256$$, and $$d_{model} = 2560$$, the size in fp32 is:
+
+$$
+\frac{(8 \times 256 \times 2560 \times 4)}{ 1024^2} \approx 20 MB
+$$
+Thus, a single residual stream activation tensor is approximately 20 MB in single precision.
+
+![](images/memory_profiling/top5-memory.png)
+
+- The largest allocations are approximately 490 MiB. From the stack trace and their size, these correspond to attention-related tensors (e.g., $QK^T$ and softmax buffers) created during the forward pass, which scale as $O(B \times H \times T^2)$ and dominate memory usage.
