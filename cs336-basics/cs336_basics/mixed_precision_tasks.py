@@ -21,7 +21,7 @@ def parse_args() -> argparse.Namespace:
 
     bench = sub.add_parser("benchmark_compare", help="Compare fp32 vs bf16 autocast timings.")
     bench.add_argument("--device", default="cuda")
-    bench.add_argument("--mode", choices=["forward", "forward_backward"], default="forward_backward")
+    bench.add_argument("--mode", choices=["inference", "training"], default="training")
     bench.add_argument("--warmup-steps", type=int, default=5)
     bench.add_argument("--measure-steps", type=int, default=10)
     bench.add_argument("--batch-size", type=int, default=8)

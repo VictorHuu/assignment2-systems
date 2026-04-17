@@ -19,7 +19,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--measure-steps", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--vocab-size", type=int, default=50_257)
-    parser.add_argument("--modes", default="forward,forward_backward,training_step")
+    parser.add_argument("--modes", default="inference,training")
 
     parser.add_argument("--d-model", type=int, default=768)
     parser.add_argument("--num-layers", type=int, default=12)
