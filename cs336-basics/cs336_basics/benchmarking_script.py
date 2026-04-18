@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import statistics
+from dataclasses import dataclass
 from timeit import default_timer
 from typing import Iterator
 
@@ -37,6 +38,20 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--optimizer-lr", type=float, default=1e-3)
     parser.add_argument("--seed", type=int, default=1337)
+    parser.add_argument(
+        "--compare-compile",
+        action="store_true",
+        help=(
+            "Run a 4-way comparison table for vanilla vs torch.compile with both "
+            "forward-only and end-to-end (forward+backward+optimizer) timings."
+        ),
+    )
+    parser.add_argument(
+        "--compile-mode",
+        default="default",
+        choices=["default", "reduce-overhead", "max-autotune"],
+        help="Mode passed to torch.compile(..., mode=...). Used only with --compare-compile.",
+    )
     parser.add_argument(
         "--memory-profile",
         action="store_true",
@@ -147,15 +162,27 @@ def main() -> None:
     if args.memory_profile and device.type != "cuda":
         raise ValueError("--memory-profile requires CUDA because torch.cuda.memory snapshots are CUDA-only.")
 
-    model = BasicsTransformerLM(
-        vocab_size=args.vocab_size,
-        context_length=args.context_length,
-        d_model=args.d_model,
-        num_layers=args.num_layers,
-        num_heads=args.num_heads,
-        d_ff=args.d_ff,
-        rope_theta=args.rope_theta,
-    ).to(device=device, dtype=dtype)
+    def build_model() -> BasicsTransformerLM:
+        return BasicsTransformerLM(
+            vocab_size=args.vocab_size,
+            context_length=args.context_length,
+            d_model=args.d_model,
+            num_layers=args.num_layers,
+            num_heads=args.num_heads,
+            d_ff=args.d_ff,
+            rope_theta=args.rope_theta,
+        ).to(device=device, dtype=dtype)
+
+    base_state_dict: dict[str, torch.Tensor] | None = None
+    single_run_model: BasicsTransformerLM | None = None
+    if args.compare_compile:
+        base_model = build_model()
+        base_state_dict = {k: v.detach().clone() for k, v in base_model.state_dict().items()}
+        del base_model
+        if device.type == "cuda":
+            torch.cuda.empty_cache()
+    else:
+        single_run_model = build_model()
 
     input_tokens = torch.randint(
         low=0,
@@ -171,9 +198,21 @@ def main() -> None:
         device=device,
         dtype=torch.long,
     )
-    optimizer = AdamW(model.parameters(), lr=args.optimizer_lr) if args.mode == "training" else None
+    @dataclass
+    class BenchResult:
+        mean_ms: float
+        median_ms: float
+        std_ms: float
 
-    model.eval()
+    def make_fresh_model() -> BasicsTransformerLM:
+        if args.compare_compile:
+            assert base_state_dict is not None
+            model = build_model()
+            model.load_state_dict(base_state_dict)
+            return model
+        assert single_run_model is not None
+        return single_run_model
+
     nvtx_enabled = args.enable_nvtx and device.type == "cuda"
 
     @contextlib.contextmanager
@@ -181,63 +220,65 @@ def main() -> None:
         with maybe_nvtx_range(nvtx_enabled, stage_name):
             yield
 
-    def inference_step() -> None:
-        with stage_nvtx("forward"):
-            with torch.inference_mode():
+    def run_single_benchmark(model: torch.nn.Module, mode: str) -> BenchResult:
+        optimizer = AdamW(model.parameters(), lr=args.optimizer_lr) if mode == "training" else None
+        model.eval()
+
+        def inference_step() -> None:
+            with stage_nvtx("forward"):
+                with torch.inference_mode():
+                    with get_autocast_context(device, args.autocast_dtype):
+                        _ = model(input_tokens)
+
+        def training_step() -> None:
+            model.train()
+            assert optimizer is not None
+            with stage_nvtx("optimizer_zero_grad"):
+                optimizer.zero_grad(set_to_none=True)
+            with stage_nvtx("forward"):
                 with get_autocast_context(device, args.autocast_dtype):
-                    _ = model(input_tokens)
+                    logits = model(input_tokens)
+            with stage_nvtx("loss"):
+                loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), labels.reshape(-1))
+            with stage_nvtx("backward"):
+                loss.backward()
+            with stage_nvtx("optimizer_step"):
+                optimizer.step()
 
-    def training_step() -> None:
-        model.train()
-        assert optimizer is not None
-        with stage_nvtx("optimizer_zero_grad"):
-            optimizer.zero_grad(set_to_none=True)
-        with stage_nvtx("forward"):
-            with get_autocast_context(device, args.autocast_dtype):
-                logits = model(input_tokens)
-        with stage_nvtx("loss"):
-            loss = F.cross_entropy(logits.reshape(-1, logits.size(-1)), labels.reshape(-1))
-        with stage_nvtx("backward"):
-            loss.backward()
-        with stage_nvtx("optimizer_step"):
-            optimizer.step()
+        step_fn_map = {"inference": inference_step, "training": training_step}
+        step_fn = step_fn_map[mode]
 
-    step_fn_map = {
-        "inference": inference_step,
-        "training": training_step,
-    }
-    step_fn = step_fn_map[args.mode]
-    mode_nvtx_name = args.mode
+        with maybe_patch_attention_with_nvtx(args.annotate_attention_nvtx, device):
+            with maybe_nvtx_range(args.enable_nvtx and device.type == "cuda", "warmup"):
+                for _ in range(args.warmup_steps):
+                    with maybe_nvtx_range(args.enable_nvtx and device.type == "cuda", "warmup_step"):
+                        step_fn()
+                    synchronize(device)
 
-    with maybe_patch_attention_with_nvtx(args.annotate_attention_nvtx, device):
-        with maybe_nvtx_range(args.enable_nvtx and device.type == "cuda", "warmup"):
-            for _ in range(args.warmup_steps):
-                with maybe_nvtx_range(args.enable_nvtx and device.type == "cuda", "warmup_step"):
-                    step_fn()
-                synchronize(device)
+            if args.memory_profile:
+                torch.cuda.empty_cache()
+                torch.cuda.reset_peak_memory_stats(device)
+                torch.cuda.memory._record_memory_history(max_entries=args.memory_max_entries)
 
-        if args.memory_profile:
-            torch.cuda.empty_cache()
-            torch.cuda.reset_peak_memory_stats(device)
-            torch.cuda.memory._record_memory_history(max_entries=args.memory_max_entries)
+            timings = []
+            for _ in range(args.measure_steps):
+                with maybe_nvtx_range(args.enable_nvtx and device.type == "cuda", "measured_step"):
+                    start = default_timer()
+                    with maybe_nvtx_range(args.enable_nvtx and device.type == "cuda", mode):
+                        step_fn()
+                    synchronize(device)
+                    end = default_timer()
+                timings.append(end - start)
 
-        timings = []
-        for _ in range(args.measure_steps):
-            with maybe_nvtx_range(args.enable_nvtx and device.type == "cuda", "measured_step"):
-                start = default_timer()
-                with maybe_nvtx_range(args.enable_nvtx and device.type == "cuda", mode_nvtx_name):
-                    step_fn()
-                synchronize(device)
-                end = default_timer()
-            timings.append(end - start)
+            if args.memory_profile:
+                torch.cuda.memory._dump_snapshot(args.memory_snapshot_path)
+                torch.cuda.memory._record_memory_history(enabled=None)
 
-        if args.memory_profile:
-            torch.cuda.memory._dump_snapshot(args.memory_snapshot_path)
-            torch.cuda.memory._record_memory_history(enabled=None)
-
-    avg_ms = statistics.mean(timings) * 1000
-    median_ms = statistics.median(timings) * 1000
-    std_ms = statistics.stdev(timings) * 1000 if len(timings) > 1 else 0.0
+        return BenchResult(
+            mean_ms=statistics.mean(timings) * 1000,
+            median_ms=statistics.median(timings) * 1000,
+            std_ms=statistics.stdev(timings) * 1000 if len(timings) > 1 else 0.0,
+        )
 
     print("Benchmark configuration:")
     print(
@@ -248,14 +289,38 @@ def main() -> None:
         f"batch_size={args.batch_size}, context_length={args.context_length}, vocab_size={args.vocab_size}, "
         f"d_model={args.d_model}, num_layers={args.num_layers}, num_heads={args.num_heads}, d_ff={args.d_ff}"
     )
-    print(f"mean={avg_ms:.3f} ms, median={median_ms:.3f} ms, std={std_ms:.3f} ms")
-    if args.memory_profile:
-        peak_allocated_mib = torch.cuda.max_memory_allocated(device) / (1024**2)
-        peak_reserved_mib = torch.cuda.max_memory_reserved(device) / (1024**2)
-        print(
-            f"memory_snapshot={args.memory_snapshot_path}, "
-            f"peak_allocated={peak_allocated_mib:.3f} MiB, peak_reserved={peak_reserved_mib:.3f} MiB"
-        )
+
+    if args.compare_compile:
+        if not hasattr(torch, "compile"):
+            raise RuntimeError("torch.compile is unavailable in this PyTorch build.")
+        if args.memory_profile:
+            raise ValueError("--memory-profile is only supported for single-run mode, not --compare-compile.")
+
+        vanilla_forward = run_single_benchmark(make_fresh_model(), mode="inference")
+        compiled_forward_model = torch.compile(make_fresh_model(), mode=args.compile_mode)
+        compiled_forward = run_single_benchmark(compiled_forward_model, mode="inference")
+        vanilla_e2e = run_single_benchmark(make_fresh_model(), mode="training")
+        compiled_e2e_model = torch.compile(make_fresh_model(), mode=args.compile_mode)
+        compiled_e2e = run_single_benchmark(compiled_e2e_model, mode="training")
+
+        print("\nTransformer torch.compile comparison (ms):")
+        print("| Benchmark | Mean (ms) | Median (ms) | Std (ms) |")
+        print("|---|---:|---:|---:|")
+        print(f"| vanilla forward | {vanilla_forward.mean_ms:.3f} | {vanilla_forward.median_ms:.3f} | {vanilla_forward.std_ms:.3f} |")
+        print(f"| compiled forward | {compiled_forward.mean_ms:.3f} | {compiled_forward.median_ms:.3f} | {compiled_forward.std_ms:.3f} |")
+        print(f"| vanilla end-to-end | {vanilla_e2e.mean_ms:.3f} | {vanilla_e2e.median_ms:.3f} | {vanilla_e2e.std_ms:.3f} |")
+        print(f"| compiled end-to-end | {compiled_e2e.mean_ms:.3f} | {compiled_e2e.median_ms:.3f} | {compiled_e2e.std_ms:.3f} |")
+        print(f"compile_mode={args.compile_mode}")
+    else:
+        result = run_single_benchmark(make_fresh_model(), mode=args.mode)
+        print(f"mean={result.mean_ms:.3f} ms, median={result.median_ms:.3f} ms, std={result.std_ms:.3f} ms")
+        if args.memory_profile:
+            peak_allocated_mib = torch.cuda.max_memory_allocated(device) / (1024**2)
+            peak_reserved_mib = torch.cuda.max_memory_reserved(device) / (1024**2)
+            print(
+                f"memory_snapshot={args.memory_snapshot_path}, "
+                f"peak_allocated={peak_allocated_mib:.3f} MiB, peak_reserved={peak_reserved_mib:.3f} MiB"
+            )
 
 
 if __name__ == "__main__":

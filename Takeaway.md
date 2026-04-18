@@ -171,3 +171,35 @@ During forward and backward passes, multiple such tensors are materialized (e.g.
 All configurations run successfully up to sequence length 8192, but fail at 16384 regardless of d_model, indicating that memory usage is dominated by sequence length rather than embedding dimension. Empirically, the memory before backward grows rapidly with sequence length, increasing by roughly 4× when sequence length doubles, consistent with the O(T²) complexity of attention. This quadratic scaling arises from the need to materialize the full attention matrix.
 
 To eliminate this memory cost, one can use memory-efficient attention mechanisms such as FlashAttention, which avoid explicitly storing the full T×T matrix and reduce memory complexity to O(T). Alternatively, activation checkpointing can trade compute for memory by recomputing intermediate activations during the backward pass.
+
+### torch_compile
+- Attention torch.compile comparison (mean ms): 
+
+| d_model | seq_len | vanilla forward (ms) | compiled forward (ms) | vanilla backward (ms) | compiled backward (ms) |
+| ------: | ------: | -------------------: | --------------------: | --------------------: | ---------------------: |
+|      16 |     256 |                0.152 |                 0.525 |                 0.386 |                  0.457 |
+|      16 |    1024 |                0.385 |                 0.406 |                 0.681 |                  0.549 |
+|      16 |    4096 |                3.061 |                 1.802 |                 5.215 |                  3.023 |
+|      16 |    8192 |               11.862 |                 8.296 |                20.219 |                 12.415 |
+|      32 |     256 |                0.321 |                 0.350 |                 0.666 |                  0.530 |
+|      32 |    1024 |                0.316 |                 0.684 |                 0.656 |                  0.628 |
+|      32 |    4096 |                3.122 |                 2.462 |                 5.271 |                  3.611 |
+|      32 |    8192 |               12.150 |                 9.983 |                20.553 |                 13.673 |
+|      64 |     256 |                0.223 |                 0.508 |                 0.611 |                  0.626 |
+|      64 |    1024 |                0.383 |                 0.687 |                 0.675 |                  0.620 |
+|      64 |    4096 |                3.255 |                 2.611 |                 5.593 |                  3.927 |
+|      64 |    8192 |               12.689 |                10.585 |                21.356 |                 14.501 |
+|     128 |     256 |                0.257 |                 0.632 |                 0.647 |                  0.637 |
+|     128 |    1024 |                0.395 |                 0.692 |                 0.678 |                  0.624 |
+|     128 |    4096 |                4.237 |                 3.595 |                 7.328 |                  5.675 |
+|     128 |    8192 |               16.594 |                14.558 |                28.135 |                 21.381 |
+
+- Transformer model: vanilla vs torch.compile
+
+| Benchmark           | Mean (ms) | Median (ms) | Std (ms) |
+| ------------------- | --------: | ----------: | -------: |
+| vanilla forward     |   104.527 |     104.521 |    0.047 |
+| compiled forward    |    67.805 |      67.848 |    0.110 |
+| vanilla end-to-end  |   325.319 |     325.330 |    0.137 |
+| compiled end-to-end |   213.375 |     213.299 |    0.268 |
+
