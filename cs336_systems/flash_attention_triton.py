@@ -6,7 +6,12 @@ from typing import Type
 import torch
 
 
-def _attention_and_lse_torch(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, is_causal: bool):
+def _attention_and_lse_torch(
+    q: torch.Tensor,
+    k: torch.Tensor,
+    v: torch.Tensor,
+    is_causal: bool = False,
+):
     d = q.shape[-1]
     scale = 1.0 / math.sqrt(d)
     scores = torch.einsum("bqd,bkd->bqk", q, k) * scale
@@ -39,7 +44,7 @@ def _build_triton_impl() -> Type[torch.autograd.Function]:
         D: tl.constexpr,
         Q_TILE_SIZE: tl.constexpr,
         K_TILE_SIZE: tl.constexpr,
-        IS_CAUSAL: tl.constexpr,
+        is_causal: tl.constexpr,
     ):
         query_tile_index = tl.program_id(0)
         batch_index = tl.program_id(1)
@@ -88,10 +93,10 @@ def _build_triton_impl() -> Type[torch.autograd.Function]:
             v = tl.load(V_block_ptr, boundary_check=(0, 1))
             s = tl.dot(q, tl.trans(k)) * scale
 
-            if IS_CAUSAL:
+            if is_causal:
                 k_rows = tl.arange(0, K_TILE_SIZE) + key_start
                 causal_mask = q_rows[:, None] >= k_rows[None, :]
-                s = tl.where(causal_mask, s, -float("inf"))
+                s = tl.where(causal_mask, s, -1e6)
 
             m_new = tl.maximum(m, tl.max(s, axis=1))
             alpha = tl.exp(m - m_new)
@@ -114,7 +119,13 @@ def _build_triton_impl() -> Type[torch.autograd.Function]:
 
     class FlashAttentionAutogradFunctionTriton(torch.autograd.Function):
         @staticmethod
-        def forward(ctx, q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, is_causal: bool):
+        def forward(
+            ctx,
+            q: torch.Tensor,
+            k: torch.Tensor,
+            v: torch.Tensor,
+            is_causal: bool = False,
+        ):
             if q.device.type != "cuda":
                 out, lse = _attention_and_lse_torch(q, k, v, is_causal)
                 ctx.is_causal = is_causal
@@ -145,7 +156,7 @@ def _build_triton_impl() -> Type[torch.autograd.Function]:
                 D=d,
                 Q_TILE_SIZE=q_tile_size,
                 K_TILE_SIZE=k_tile_size,
-                IS_CAUSAL=is_causal,
+                is_causal=is_causal,
             )
             ctx.is_causal = is_causal
             ctx.save_for_backward(q, k, v, lse)
@@ -166,4 +177,3 @@ def _build_triton_impl() -> Type[torch.autograd.Function]:
 
 def get_flashattention_autograd_function_triton() -> Type[torch.autograd.Function]:
     return _build_triton_impl()
-
