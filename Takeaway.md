@@ -171,7 +171,7 @@ During forward and backward passes, multiple such tensors are materialized (e.g.
 All configurations run successfully up to sequence length 8192, but fail at 16384 regardless of d_model, indicating that memory usage is dominated by sequence length rather than embedding dimension. Empirically, the memory before backward grows rapidly with sequence length, increasing by roughly 4× when sequence length doubles, consistent with the O(T²) complexity of attention. This quadratic scaling arises from the need to materialize the full attention matrix.
 
 To eliminate this memory cost, one can use memory-efficient attention mechanisms such as FlashAttention, which avoid explicitly storing the full T×T matrix and reduce memory complexity to O(T). Alternatively, activation checkpointing can trade compute for memory by recomputing intermediate activations during the backward pass.
-
+## 1.3 Benchmarking JIT-compiled attention
 ### torch_compile
 - Attention torch.compile comparison (mean ms): 
 
@@ -202,4 +202,11 @@ To eliminate this memory cost, one can use memory-efficient attention mechanisms
 | compiled forward    |    67.805 |      67.848 |    0.110 |
 | vanilla end-to-end  |   325.319 |     325.330 |    0.137 |
 | compiled end-to-end |   213.375 |     213.299 |    0.268 |
+
+### flash_benchmarking
+| implementation | dtype | seq_len | d_model | forward_ms | backward_ms | end_to_end_ms | status | note |
+|---|---|---:|---:|---:|---:|---:|---|---|
+| pytorch_attention | bfloat16 | 128 | 16 | 0.02456327339380302 | 0.25466174269333863 | 0.4873205333948135 | ok |  |
+| triton_flashattention2 | bfloat16 | 128 | 16 | 0.005246596559963859 | 0.8202879970723932 | 1.1936447938283286 | ok |  |
+
 

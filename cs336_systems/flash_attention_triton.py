@@ -141,8 +141,16 @@ def _build_triton_impl() -> Type[torch.autograd.Function]:
             lse = torch.empty((batch_size, n_queries), device=q.device, dtype=torch.float32)
             scale = 1.0 / math.sqrt(d)
 
-            q_tile_size = 64
-            k_tile_size = 64
+            if n_queries >= 4096:
+                q_tile_size = 128
+                k_tile_size = 128
+            elif n_queries >= 1024:
+                q_tile_size = 128
+                k_tile_size = 64
+            else:
+                q_tile_size = 64
+                k_tile_size = 64
+
             grid = (triton.cdiv(n_queries, q_tile_size), batch_size)
             flash_fwd_kernel[grid](
                 q, k, v, out, lse,

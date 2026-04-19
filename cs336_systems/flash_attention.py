@@ -5,6 +5,40 @@ import math
 import torch
 
 
+@torch.compile
+def _flash_attention_backward_impl(
+    Q: torch.Tensor,
+    K: torch.Tensor,
+    V: torch.Tensor,
+    O: torch.Tensor,
+    dO: torch.Tensor,
+    L: torch.Tensor,
+):
+    d_model = Q.shape[-1]
+    scale = 1.0 / math.sqrt(d_model)
+
+    q_fp32 = Q.to(torch.float32)
+    k_fp32 = K.to(torch.float32)
+    v_fp32 = V.to(torch.float32)
+    o_fp32 = O.to(torch.float32)
+    do_fp32 = dO.to(torch.float32)
+    l_fp32 = L.to(torch.float32)
+
+    S = torch.einsum("bqd,bkd->bqk", q_fp32, k_fp32) * scale
+    P = torch.exp(S - l_fp32.unsqueeze(-1))
+
+    dV = torch.einsum("bqk,bqd->bkd", P, do_fp32)
+    dP = torch.einsum("bqd,bkd->bqk", do_fp32, v_fp32)
+
+    D = torch.sum(do_fp32 * o_fp32, dim=-1, keepdim=True)
+    dS = P * (dP - D)
+
+    dQ = torch.einsum("bqk,bkd->bqd", dS, k_fp32) * scale
+    dK = torch.einsum("bqk,bqd->bkd", dS, q_fp32) * scale
+
+    return dQ.to(Q.dtype), dK.to(K.dtype), dV.to(V.dtype)
+
+
 class FlashAttention2PyTorchFunction(torch.autograd.Function):
     """Pure PyTorch FlashAttention-2 forward pass (Section 1.3.2(a))."""
 
@@ -58,4 +92,6 @@ class FlashAttention2PyTorchFunction(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, dO: torch.Tensor):
-        raise NotImplementedError("Backward pass is not implemented for Section 1.3.2(a).")
+        L, Q, K, V, O = ctx.saved_tensors
+        dQ, dK, dV = _flash_attention_backward_impl(Q, K, V, O, dO, L)
+        return dQ, dK, dV, None
